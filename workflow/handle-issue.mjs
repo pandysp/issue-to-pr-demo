@@ -1,8 +1,8 @@
 // Follow one ticket: listen.mjs calls handleIssue() once it spots a new issue.
 // Start at that function below. Helpers are grouped by when the workflow needs them.
-// pi 018634af · 2026-11-20T15:26+01:00
-// Trusted code here talks to GitHub (gh CLI), checks the diff and runs the tests. The model never
-// gets a GitHub token: it only decides (Triage) and edits one throwaway checkout (Implement).
+// pi 018634af · 2026-11-20T15:31+01:00 · Opus 5.5 review
+// This process uses gh to write to GitHub. Codex does not inherit its GitHub credentials
+// in the environment; sandboxing does not hide every readable file on the host.
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,7 @@ import { AgentInstanceExistsError, init } from '@flue/runtime';
 import { Implement, Triage } from './agents.mjs';
 import { CODEX_MODEL } from './codex-provider.mjs';
 
-const ADMITTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const ADMITTED = new Set(['OWNER', 'COLLABORATOR']);
 const ALLOWED_PATHS = /^(src|test)\//;
 const EFFORT = 'high';
 
@@ -23,7 +23,7 @@ const footer = `\n\n<sub>Flue workflow · ${CODEX_MODEL}, reasoning effort ${EFF
  * @param {{login:string,id:number}} o.author authenticated GitHub account
  * @param {string} o.baseBranch default branch of the target repository
  * @param {number} o.number      issue number
- * @param {object} o.dirs        { main, work, base, receipts, codexHome }
+ * @param {object} o.dirs        { state, main, work, base, receipts, codexHome }
  * @param {(s: string) => void} o.log
  */
 export async function handleIssue({ repo, number, dirs, log, author, baseBranch }) {
@@ -71,7 +71,7 @@ export async function handleIssue({ repo, number, dirs, log, author, baseBranch 
   const evidence = verifyFix(dirs, number);
   const pr = openReviewPR({
     repo, number, issue, branch, baseBranch, author, dirs, decision,
-    implementation: implementation.reply, evidence,
+    evidence,
   });
   return { status: 'complete', risk, pr, changed: evidence.changed, receipts: [...triage.receipts, ...implementation.receipts] };
 }
@@ -129,22 +129,21 @@ function verifyFix(dirs, number) {
   }
   const before = testRun(dirs.base, dirs.codexHome);
   if (before.passed) throw new Error(`#${number}: the new tests also pass on the old code, so they do not show the bug`);
-  writeFileSync(join(dirs.work, '..', `issue-${number}-tests.txt`), `BEFORE\n${before.output}\nAFTER\n${after.output}`);
+  writeFileSync(join(dirs.state, `issue-${number}-tests.txt`), `BEFORE\n${before.output}\nAFTER\n${after.output}`);
   return { changed, before, after };
 }
 
 // Only trusted workflow code can publish. The final action is a PR, never a merge.
-function openReviewPR({ repo, number, issue, branch, baseBranch, author, dirs, decision, implementation, evidence }) {
+function openReviewPR({ repo, number, issue, branch, baseBranch, author, dirs, decision, evidence }) {
   const { changed, before, after } = evidence;
   const gitIdentity = ['-c', `user.name=${author.login}`, '-c', `user.email=${author.id}+${author.login}@users.noreply.github.com`];
   sh('git', ['add', '--', ...changed], { cwd: dirs.work });
   sh('git', [...gitIdentity, 'commit', '-q', '-m', `Fix: ${issue.title} (#${number})`], { cwd: dirs.work });
-  // Push with gh's credential in this trusted process only; the model never sees it.
+  // Supply the credential helper to this push, not to the coding agent’s environment.
   sh('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', '-q', '-u', 'origin', branch], { cwd: dirs.work });
   const body = [
     `Fixes #${number}.`, '', `**Goal:** ${decision.goal}`, `**Done when:** ${decision.acceptance}`, '',
     `**Changed:** ${changed.map((f) => `\`${f}\``).join(', ')}`, '',
-    `**What the coding step reported:** ${implementation.text.trim()}`, '',
     `**Tests before the fix** (the new tests on the old code): ${countLine(before.counts)}`,
     `**Tests after the fix:** ${countLine(after.counts)}`,
     '(Run by the workflow itself in a sandbox without network, not reported by the agent.)',
@@ -167,11 +166,9 @@ const ghJson = (...args) => JSON.parse(gh(...args));
 function testRun(cwd, codexHome) {
   const env = { PATH: process.env.PATH, HOME: mkdtempSync(join(tmpdir(), 'tests-')), CODEX_HOME: codexHome, LANG: 'en_US.UTF-8' };
   const args = ['sandbox', '-P', ':read-only', '-C', cwd, '--', 'node', '--test', 'test/'];
+  let output;
   try {
-    const output = sh('codex', args, { cwd, env });
-    const counts = testCounts(output);
-    if (!(counts.pass > 0)) throw new Error('No passing tests reported by the test runner');
-    return { passed: true, output, counts };
+    output = sh('codex', args, { cwd, env });
   } catch (error) {
     const output = `${error.stdout ?? ''}${error.stderr ?? ''}`;
     // A sandbox or command failure is not a reproduced bug. Require a test-runner failure count.
@@ -182,6 +179,9 @@ function testRun(cwd, codexHome) {
   } finally {
     rmSync(env.HOME, { recursive: true, force: true });
   }
+  const counts = testCounts(output);
+  if (!(counts.pass > 0)) throw new Error('No passing tests reported by the test runner');
+  return { passed: true, output, counts };
 }
 // Only counts leave the machine; test output itself is model-influenced and is not posted.
 function testCounts(output) {

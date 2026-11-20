@@ -1,7 +1,7 @@
 // A Flue/Pi model provider backed by the official Codex CLI ("codex exec").
 // Each model call starts one sandboxed Codex run with the ChatGPT login Codex already has,
 // so no API key is used. Codex is a restricted worker: read-only for triage, workspace-write
-// (network off) in one throwaway checkout for code changes. The worker gets no GitHub token.
+// (network off) in one throwaway checkout for code changes. No GitHub token is passed in the worker environment.
 //
 // Structured results: when the agent offers exactly one tool, Codex must answer with JSON that
 // matches the tool's parameter schema (codex --output-schema), and the adapter returns it as a
@@ -14,7 +14,7 @@ import {
   createProvider, createAssistantMessageEventStream, getSystemMessageText, contentText,
 } from '@earendil-works/pi-ai';
 
-// pi 018634af · 2026-11-20T15:25+01:00
+// pi 018634af · 2026-11-20T15:31+01:00
 export const CODEX_MODEL = process.env.DEMO_CODEX_MODEL ?? 'gpt-6.2-sol';
 if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(CODEX_MODEL)) throw new Error('Invalid DEMO_CODEX_MODEL');
 export const workerEnv = (codexHome) => ({ PATH: process.env.PATH, HOME: homedir(), CODEX_HOME: codexHome, LANG: 'en_US.UTF-8' });
@@ -146,7 +146,7 @@ export function codexCliProvider({ readOnlyCwd, workspaceCwd, receiptsPath, code
         }
         if (tools.length > 1) throw new Error(`codex-cli adapter supports at most one tool, got ${tools.map((t) => t.name).join(', ')}`);
         // First translate Flue’s turn into one CLI invocation. Both roles use the same
-        // model, but triage reads the base checkout while implementation writes to work.
+        // model, but triage reads dirs.main while implementation writes to dirs.work.
         const { sandbox, cwd } = sandboxFor(m);
         const tool = tools[0];
         const run = await runCodex({

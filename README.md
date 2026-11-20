@@ -48,13 +48,13 @@ new issue
 - Codex signs in locally in a dedicated Codex home outside the checkout. You don't need to copy a token, export an API key, or put a secret in GitHub. Keep the state directory private: it contains the local sign-in and run records.
 - The workflow accepts a change only if it touches nothing outside `src/` and `test/`. The new tests must fail on the old code and pass on the new code. Otherwise no pull request is opened.
 - The workflow runs those tests itself, in Codex's read-only sandbox (`codex sandbox -P :read-only`): no network, no writes, a throwaway home directory. Only the counts go into the pull request.
-- Known limit: Codex's sandboxes block network and writes, but not reads. That is why only the owner and collaborators can start a run, and why the workflow posts nothing to GitHub except the triage text, the counts and the reviewed diff.
-- Issues from people who are not the owner or a collaborator are ignored, so strangers cannot start model runs.
+- Known limit: Codex's sandboxes block network and writes, but not reads. That is why only the owner and collaborators can start a run, and why the model's free-form implementation summary stays out of the PR. The issue questions, goal, acceptance check, filenames and test counts are visible on GitHub, as is the patch itself **before** a person reviews it.
+- Only issues GitHub marks `OWNER` or `COLLABORATOR` can start a model run. Organization membership (`MEMBER`) alone does not qualify. Use a personal fork for the walkthrough.
 - A re-delivered issue does not start a second run: each issue gets one Flue agent instance, created only once.
 
 ## Try it on your own fork
 
-<!-- pi 018634af · 2026-11-20T15:17+01:00 -->
+<!-- pi 018634af · 2026-11-20T15:31+01:00 -->
 **You supply two logins.** GitHub gives the listener permission to write to *your fork*. Choosing **Sign in with ChatGPT** in the Codex CLI uses the Codex allowance of *your ChatGPT account*. It doesn't use the original author's subscription. This workflow doesn't use API-key billing or GitHub Actions.
 
 Use a local macOS or Linux shell with Git, [GitHub CLI](https://cli.github.com/), [OpenAI Codex CLI](https://developers.openai.com/codex/cli/) and Node.js (tested with 26.13.0). Your ChatGPT account must include Codex and support the selected model at high reasoning effort. Use a trusted machine and trusted collaborators: the sandbox limits writes and networking, but does not isolate all reads.
@@ -62,7 +62,7 @@ Use a local macOS or Linux shell with Git, [GitHub CLI](https://cli.github.com/)
 1. Fork this repository on GitHub and enable **Settings → General → Features → Issues** on the fork. Run `gh auth login` if not already signed in. Clone **your fork**, not the original:
 
    ```sh
-   REPO="$(gh api user --jq .login)/issue-to-pr-demo"  # edit if you renamed the fork or used an organization
+   REPO="$(gh api user --jq .login)/issue-to-pr-demo"  # edit if you renamed your fork
    gh repo clone "$REPO" issue-to-pr-local
    cd issue-to-pr-local/workflow
    npm ci

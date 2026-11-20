@@ -1,6 +1,6 @@
 // Entry point: watch one repository for new issues during a bounded demo window.
 // Run from workflow/: node listen.mjs --repo OWNER/REPO --minutes 20
-// pi 018634af · 2026-11-20T15:24+01:00
+// pi 018634af · 2026-11-20T15:31+01:00
 import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -20,6 +20,12 @@ const { values: options } = parseArgs({ options: {
   minutes: { type: 'string', default: '20' },
   interval: { type: 'string', default: '15' },
 } });
+
+const minutes = Number(options.minutes);
+const pollSeconds = Number(options.interval);
+if (!Number.isFinite(minutes) || minutes <= 0 || !Number.isFinite(pollSeconds) || pollSeconds <= 0) {
+  throw new Error('--minutes and --interval must be positive, finite numbers.');
+}
 
 // Two identities, two jobs: ChatGPT pays for model work; GitHub authorizes repository changes.
 const repo = options.repo;
@@ -47,7 +53,7 @@ await using flue = await start({
 });
 
 const startedAt = new Date();
-const stopAt = new Date(startedAt.getTime() + Number(options.minutes) * 60_000);
+const stopAt = new Date(startedAt.getTime() + minutes * 60_000);
 const seen = new Set();
 log(`listening on ${repo} for issues opened after ${startedAt.toISOString()}, until ${stopAt.toISOString()}`);
 while (Date.now() < stopAt.getTime()) {
@@ -66,7 +72,7 @@ while (Date.now() < stopAt.getTime()) {
       log(`#${issue.number} FAILED: ${error.message}`);
     }
   }
-  await delay(Number(options.interval) * 1000);
+  await delay(pollSeconds * 1000);
 }
 log('listener stopped (time limit reached)');
 
