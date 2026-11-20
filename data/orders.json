@@ -1,0 +1,5 @@
+[
+  { "id": 101, "customer": "Ada Lovelace", "total": 42.5, "status": "paid", "internalNote": "VIP, call before shipping" },
+  { "id": 102, "customer": "Grace Hopper", "total": 19.99, "status": "paid", "internalNote": "" },
+  { "id": 103, "customer": "Alan Turing", "total": 7, "status": "refunded", "internalNote": "Refund approved by support" }
+]

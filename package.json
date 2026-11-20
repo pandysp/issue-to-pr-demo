@@ -1,0 +1,13 @@
+{
+  "name": "issue-to-pr-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A tiny CSV order exporter used to demo an issue-to-PR workflow.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "export": "node src/cli.mjs data/orders.json"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}
