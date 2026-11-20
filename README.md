@@ -48,7 +48,7 @@ Wait for **`listening on OWNER/REPO`**, then open an issue **on that fork** in y
 
 Refresh the issue to see the label, then the questions or the link to a pull request. **A person decides whether to merge.**
 
-> **No label yet?** This is a local listener, not a hosted service. Leave the terminal open. It polls every 15 seconds and only picks up issues opened **after** it starts. Only GitHub users marked `OWNER` or `COLLABORATOR` can trigger a run. If a run fails, the terminal prints the issue number and error. Fix the cause, restart the listener, then open a fresh issue. Stop with `Ctrl-C`.
+> **No label yet?** This is a local listener, not a hosted service. Leave the terminal open. It polls every 15 seconds and only picks up issues opened **after** it starts. Only GitHub users marked `OWNER` or `COLLABORATOR` can trigger a run. If a ticket fails, the terminal prints its number and error. If the listener cannot read GitHub’s issue list, it prints the error and stops. Fix the cause, restart the listener and wait for `listening on` before opening a fresh issue. Stop with `Ctrl-C`.
 
 ## How the workflow works
 
@@ -99,4 +99,4 @@ The [sample data](data/orders.json) contains three orders. On the demo baseline 
 
 [MIT license](LICENSE)
 
-<!-- pi 018634af · 2026-11-20T15:55+01:00 -->
+<!-- pi 018634af · 2026-11-20T16:02+01:00 -->
