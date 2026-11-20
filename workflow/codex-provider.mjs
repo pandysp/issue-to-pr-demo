@@ -7,14 +7,17 @@
 // matches the tool's parameter schema (codex --output-schema), and the adapter returns it as a
 // call to that tool. Without tools, Codex's final message is returned as text.
 import { spawn } from 'node:child_process';
-import { appendFileSync, lstatSync, readFileSync, readdirSync, statSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { appendFileSync, readFileSync, readdirSync, statSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createProvider, createAssistantMessageEventStream, getSystemMessageText, contentText,
 } from '@earendil-works/pi-ai';
 
-export const CODEX_MODEL = 'gpt-6.2-sol';
+// pi 018634af · 2026-11-20T15:25+01:00
+export const CODEX_MODEL = process.env.DEMO_CODEX_MODEL ?? 'gpt-6.2-sol';
+if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(CODEX_MODEL)) throw new Error('Invalid DEMO_CODEX_MODEL');
+export const workerEnv = (codexHome) => ({ PATH: process.env.PATH, HOME: homedir(), CODEX_HOME: codexHome, LANG: 'en_US.UTF-8' });
 const API = 'codex-cli-exec';
 
 const zeroUsage = () => ({
@@ -80,7 +83,7 @@ function runCodex({ codexHome, prompt, cwd, sandbox, effort, schema, signal }) {
   const dir = mkdtempSync(join(tmpdir(), 'codex-call-'));
   const lastPath = join(dir, 'answer.txt');
   const args = [
-    'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort="${effort}"`,
+    'exec', '-c', 'cli_auth_credentials_store="file"', '-m', CODEX_MODEL, '-c', `model_reasoning_effort="${effort}"`,
     '--sandbox', sandbox, '--skip-git-repo-check', '--json', '-C', cwd, '-o', lastPath,
   ];
   if (schema) {
@@ -90,10 +93,8 @@ function runCodex({ codexHome, prompt, cwd, sandbox, effort, schema, signal }) {
   }
   args.push(prompt);
   return new Promise((resolve, reject) => {
-    // Minimal environment: no GitHub token or other secrets reach the worker. CODEX_HOME is the
-    // workflow's own Codex home: it links to the existing ChatGPT login and holds no personal
-    // instructions, config or MCP servers.
-    const env = { PATH: process.env.PATH, HOME: homedir(), CODEX_HOME: codexHome, LANG: 'en_US.UTF-8' };
+    // Pass an allowlist of environment variables, not the listener’s GitHub credentials.
+    const env = workerEnv(codexHome);
     const child = spawn('codex', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], signal });
     let out = '', err = '';
     child.stdout.on('data', (d) => { out += d; });
@@ -114,19 +115,14 @@ function runCodex({ codexHome, prompt, cwd, sandbox, effort, schema, signal }) {
  * @param {string} o.readOnlyCwd   directory Codex may read during read-only calls
  * @param {string} o.workspaceCwd  the only directory Codex may write to (workspace model)
  * @param {string} o.receiptsPath  JSONL file that records one receipt per Codex call
- * @param {string} o.codexHome     Codex home for the workers; auth.json there must be a link to the real login
+ * @param {string} o.codexHome     private Codex home used for both interactive login and worker runs
  */
 export function codexCliProvider({ readOnlyCwd, workspaceCwd, receiptsPath, codexHome }) {
-  const assertLinkedLogin = () => {
-    if (!lstatSync(join(codexHome, 'auth.json')).isSymbolicLink()) {
-      throw new Error('The workers\' Codex login must stay a link to the existing login, not a copy');
-    }
-  };
   const model = (id, name, baseUrl) => ({
     id, name, api: API, provider: 'codex-cli', baseUrl, reasoning: true, input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 400000, maxTokens: 128000,
   });
-  const sandboxFor = (m) => (m.id.endsWith('-workspace')
+  const sandboxFor = (m) => (m.id === `${CODEX_MODEL}-workspace`
     ? { sandbox: 'workspace-write', cwd: workspaceCwd } : { sandbox: 'read-only', cwd: readOnlyCwd });
 
   function streamSimple(m, context, options = {}) {
@@ -149,14 +145,14 @@ export function codexCliProvider({ readOnlyCwd, workspaceCwd, receiptsPath, code
           return;
         }
         if (tools.length > 1) throw new Error(`codex-cli adapter supports at most one tool, got ${tools.map((t) => t.name).join(', ')}`);
+        // First translate Flue’s turn into one CLI invocation. Both roles use the same
+        // model, but triage reads the base checkout while implementation writes to work.
         const { sandbox, cwd } = sandboxFor(m);
-        assertLinkedLogin();
         const tool = tools[0];
         const run = await runCodex({
           codexHome, prompt: renderPrompt(messages), cwd, sandbox, effort,
           schema: tool ? outputSchema(tool.parameters) : null, signal: options.signal,
         });
-        assertLinkedLogin();
         const receipt = { at: new Date().toISOString(), ...sessionReceipt(codexHome, run.threadId), flueModel: `codex-cli/${m.id}` };
         appendFileSync(receiptsPath, `${JSON.stringify(receipt)}\n`);
         partial.responseId = run.threadId;
@@ -166,6 +162,8 @@ export function codexCliProvider({ readOnlyCwd, workspaceCwd, receiptsPath, code
           output: run.usage.output_tokens ?? 0,
           totalTokens: (run.usage.input_tokens ?? 0) + (run.usage.output_tokens ?? 0),
         };
+        // Then translate the result back. Triage returns arguments for record_triage;
+        // implementation leaves its patch on disk and returns ordinary text.
         if (tool) {
           const call = { type: 'toolCall', id: `call_${run.threadId}`, name: tool.name, arguments: JSON.parse(run.text) };
           partial.content.push(call);
@@ -196,8 +194,8 @@ export function codexCliProvider({ readOnlyCwd, workspaceCwd, receiptsPath, code
     // Codex uses its own ChatGPT login; the provider holds no credential.
     auth: { apiKey: { name: 'Codex CLI login', resolve: async () => ({ auth: {} }) } },
     models: [
-      model(CODEX_MODEL, 'GPT-6.2-Sol via Codex CLI (read-only)', 'codex://read-only'),
-      model(`${CODEX_MODEL}-workspace`, 'GPT-6.2-Sol via Codex CLI (workspace-write)', 'codex://workspace-write'),
+      model(CODEX_MODEL, `${CODEX_MODEL} via Codex CLI (read-only)`, 'codex://read-only'),
+      model(`${CODEX_MODEL}-workspace`, `${CODEX_MODEL} via Codex CLI (workspace-write)`, 'codex://workspace-write'),
     ],
     api: { stream: streamSimple, streamSimple },
   });
