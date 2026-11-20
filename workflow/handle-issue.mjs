@@ -1,10 +1,10 @@
 // Follow one ticket: listen.mjs calls handleIssue() once it spots a new issue.
 // Start at that function below. Helpers are grouped by when the workflow needs them.
-// pi 018634af · 2026-11-20T15:31+01:00 · Opus 5.5 review
+// pi 018634af · 2026-11-20T15:54+01:00
 // This process uses gh to write to GitHub. Codex does not inherit its GitHub credentials
 // in the environment; sandboxing does not hide every readable file on the host.
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentInstanceExistsError, init } from '@flue/runtime';
@@ -23,13 +23,14 @@ const footer = `\n\n<sub>Flue workflow · ${CODEX_MODEL}, reasoning effort ${EFF
  * @param {{login:string,id:number}} o.author authenticated GitHub account
  * @param {string} o.baseBranch default branch of the target repository
  * @param {number} o.number      issue number
- * @param {object} o.dirs        { state, main, work, base, receipts, codexHome }
+ * @param {object} o.dirs        { state, main, work, base, receipts, codexHome, prepareFix }
  * @param {(s: string) => void} o.log
  */
 export async function handleIssue({ repo, number, dirs, log, author, baseBranch }) {
   // 1. Decide who may spend this account's Codex allowance. No model has run yet.
   const issue = ghJson('api', `repos/${repo}/issues/${number}`);
   if (issue.pull_request) return { status: 'skipped', reason: 'pull request' };
+  if (issue.state !== 'open') return { status: 'skipped', reason: 'issue closed' };
   if (!ADMITTED.has(issue.author_association)) {
     log(`#${number}: opened by someone who is not the owner or a collaborator; not sent to a model`);
     return { status: 'skipped', reason: 'author not admitted' };
@@ -64,7 +65,7 @@ export async function handleIssue({ repo, number, dirs, log, author, baseBranch 
   const branch = `agent/issue-${number}`;
   const existingPRs = ghJson('pr', 'list', '--repo', repo, '--head', branch, '--state', 'all', '--json', 'url');
   if (existingPRs.length) return { status: 'skipped', reason: 'pull request already exists' };
-  prepareCheckouts(repo, dirs, branch);
+  dirs.prepareFix(branch);
   const implementation = await runAgent(Implement, 'implement', number, fixRequest(number, issue, decision), dirs.receipts);
 
   // 5. An agent saying “fixed” is not enough. Verify its diff and test results before pushing.
@@ -97,15 +98,6 @@ function postQuestions(repo, number, decision) {
   return questions;
 }
 
-function prepareCheckouts(repo, dirs, branch) {
-  // work gets the patch; base keeps the original exporter for the comparison.
-  for (const dir of [dirs.work, dirs.base]) {
-    rmSync(dir, { recursive: true, force: true });
-    sh('git', ['clone', '-q', `https://github.com/${repo}.git`, dir]);
-  }
-  sh('git', ['checkout', '-q', '-b', branch], { cwd: dirs.work });
-}
-
 function fixRequest(number, issue, decision) {
   return [
     `Issue #${number}: ${issue.title}`, issue.body ?? '', '',
@@ -113,18 +105,27 @@ function fixRequest(number, issue, decision) {
   ].join('\n');
 }
 
-function verifyFix(dirs, number) {
-  const changed = sh('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: dirs.work })
-    .split('\n').filter(Boolean).map((l) => l.slice(3));
+export function verifyFix(dirs, number) {
+  const head = (cwd) => sh('git', ['rev-parse', 'HEAD'], { cwd }).trim();
+  if (head(dirs.work) !== head(dirs.base)) throw new Error(`#${number}: expected uncommitted changes on the triaged revision`);
+  const changed = sh('git', ['status', '--porcelain', '-z', '--no-renames', '--untracked-files=all'], { cwd: dirs.work })
+    .split('\0').filter(Boolean).map((entry) => entry.slice(3));
   if (!changed.length) throw new Error(`#${number}: the coding step changed nothing`);
   const outside = changed.filter((f) => !ALLOWED_PATHS.test(f));
   if (outside.length) throw new Error(`#${number}: changes outside src/ and test/: ${outside.join(', ')}`);
+  const changedTests = changed.filter((path) => path.startsWith('test/'));
+  if (!changedTests.length) throw new Error(`#${number}: add or extend a regression test before proposing a fix`);
+  for (const path of changed) {
+    const entry = lstatSync(join(dirs.work, path), { throwIfNoEntry: false });
+    if (!entry && path.startsWith('test/')) throw new Error(`#${number}: keep existing tests; deleted ${path}`);
+    if (entry && !entry.isFile()) throw new Error(`#${number}: expected a regular file at ${path}`);
+  }
   const after = testRun(dirs.work, dirs.codexHome);
   if (!after.passed) throw new Error(`#${number}: tests fail after the change (${countLine(after.counts)})`);
 
   // A green test on the fix is only half the evidence. Copy just the tests into
   // the untouched checkout: if they pass there too, they didn't catch the bug.
-  for (const testPath of changed.filter((path) => path.startsWith('test/'))) {
+  for (const testPath of changedTests) {
     cpSync(join(dirs.work, testPath), join(dirs.base, testPath));
   }
   const before = testRun(dirs.base, dirs.codexHome);

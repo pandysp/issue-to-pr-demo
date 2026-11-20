@@ -56,12 +56,12 @@ If you only open one file, read [`handleIssue()`](workflow/handle-issue.mjs). Th
 
 | Follow a ticket | Where to look |
 | --- | --- |
-| **Notice it.** Watch for new GitHub issues and handle them one at a time. | [`listen.mjs`](workflow/listen.mjs) |
+| **Notice it.** At startup, remember GitHub’s position in the issue list. Each poll reads every new page after that position. Process open tickets one at a time. | [`listen.mjs`](workflow/listen.mjs) · [`issue-feed.mjs`](workflow/issue-feed.mjs) |
 | **Decide.** Check the author, ask the read-only triage agent for a decision, enforce the allowed scope and apply the label. | [`handle-issue.mjs`](workflow/handle-issue.mjs) for the rules · [`agents.mjs`](workflow/agents.mjs) for the prompts |
 | **Act.** For high risk, post questions. For low risk, give the coding agent a disposable checkout. Test the patch, copy the changed tests onto the old exporter, and run them again. If they pass there too, they haven't shown the bug. | `postQuestions`, `verifyFix` and `openReviewPR` in [`handle-issue.mjs`](workflow/handle-issue.mjs) |
 | **Underneath both agents.** Connect each Flue model call to a sandboxed `codex exec` and record which model and reasoning effort actually ran. | [`codex-provider.mjs`](workflow/codex-provider.mjs) |
 
-The [workflow package](workflow/package.json) pins the runtime and exposes `npm test` (run from `workflow/`). Its [CLI setup test](workflow/setup.test.mjs) walks through sign-in and account checks; its [adapter test](workflow/codex-provider.test.mjs) exercises both agent roles without spending model usage. `npm ci` installs the versions in the [generated lockfile](workflow/package-lock.json).
+The [workflow package](workflow/package.json) pins the runtime and exposes `npm test` (run from `workflow/`). The tests exercise setup, the Codex adapter for both roles, polling and Git checkouts without calling a model. `npm ci` installs the versions in the [generated lockfile](workflow/package-lock.json).
 
 <details>
 <summary><strong>Run the exporter without an agent</strong></summary>
@@ -83,11 +83,20 @@ The [sample data](data/orders.json) contains three orders. On the demo baseline 
 - **Access.** GitHub organization membership alone (`MEMBER`) does not start a run. Use a trusted machine and trusted collaborators: sandboxing limits writes and network access but does **not** hide every file your user can read. The listener does not pass its GitHub token to Codex in the worker environment.
 - **Changes.** The workflow labels a run low risk only if all proposed files are under `src/` or `test/`. It checks the actual diff again before opening a PR. The patch is visible on GitHub before human review; the agent's free-form implementation summary stays out of the PR.
 - **Evidence.** The workflow runs tests itself in a read-only sandbox with networking disabled. The PR includes test counts rather than raw output. Flue creates each triage instance only once so the same issue doesn't start a second run.
-- **Private state.** The dedicated Codex login, database, checkouts, log and model receipts live under `~/.local/state/issue-to-pr-demo/<owner>/<repo>/` (lowercase). Keep this directory private and outside the checkout. To move it, pass the same `--state-dir /path/to/state` to every invocation.
+- **Private state.** The dedicated Codex login, database, log and model receipts live under `~/.local/state/issue-to-pr-demo/<owner>/<repo>/` (lowercase). Keep this directory private and outside the checkout. Each listener uses its own [temporary checkouts](workflow/checkouts.mjs). The implementation and the test baseline both start at the commit triage inspected. Reaching the time limit removes that listener’s checkouts. Interrupting it with Ctrl-C can leave its `checkouts-*` directory behind. Once that listener has stopped, you can delete its temporary checkouts without deleting the login or run history.
+- **Changing directories or upgrading.** The first run requires an empty state directory and marks it for your fork. If the listener rejects a directory from an earlier version, leave it intact. Pick a new path outside the checkout and use it for both commands. For example, from `workflow/`:
+
+  ```sh
+  STATE="$HOME/.local/state/issue-to-pr-demo-v2/$REPO"
+  node listen.mjs --repo "$REPO" --state-dir "$STATE" --login
+  node listen.mjs --repo "$REPO" --state-dir "$STATE" --minutes 20
+  ```
+
+  Sign in again rather than copying credentials. A new state directory starts a new local run history.
 - **Setup check.** `node listen.mjs --repo "$REPO" --check` confirms the login method and repository access without starting a listener or consuming model usage. It reports the requested model; the first issue tests whether your account can use it.
 
 </details>
 
 [MIT license](LICENSE)
 
-<!-- pi 018634af · 2026-11-20T15:37+01:00 -->
+<!-- pi 018634af · 2026-11-20T15:55+01:00 -->

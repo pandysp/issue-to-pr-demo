@@ -1,7 +1,7 @@
-// pi 018634af · 2026-11-20T15:40+01:00. CLI checks; fake only GitHub and Codex, never call a model.
+// pi 018634af · 2026-11-20T15:53+01:00. CLI checks; fake only GitHub and Codex, never call a model.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, chmodSync, statSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -29,6 +29,41 @@ test('a fork owner signs in and checks their fork without starting a listener', 
   // An API-key login would bill a different account; it must not pass the check.
   writeFileSync(join(state, 'codex-home/test-status'), 'Logged in using an API key');
   expectFailure(run(...repo, '--check'), /not a subscription login/);
+});
+
+test('login refuses a nonempty unowned state directory before writing any credentials', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'unowned-state-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const run = setupCommands(home);
+  const state = join(home, 'unrelated-project');
+  mkdirSync(join(state, 'work'), { recursive: true });
+  writeFileSync(join(state, 'work', 'keep.txt'), 'not owned by this workflow');
+  expectFailure(run('--repo', 'attendee/export', '--state-dir', state, '--login'), /empty directory/i);
+  assert.equal(existsSync(join(state, 'codex-home')), false);
+  assert.equal(existsSync(join(state, 'work', 'keep.txt')), true);
+});
+
+test('upgrade leaves the old login intact and signs in privately at the new path', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'fork-upgrade-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const run = setupCommands(home);
+  const repo = ['--repo', 'attendee/export'];
+  const old = join(home, '.local/state/issue-to-pr-demo/attendee/export');
+  const oldLogin = join(old, 'codex-home/test-status');
+  mkdirSync(join(old, 'codex-home'), { recursive: true });
+  writeFileSync(oldLogin, 'old fixture login');
+  const rejected = run(...repo, '--login');
+  expectFailure(rejected, /empty directory/);
+  assert.ok(rejected.stderr.includes(old));
+
+  const fresh = join(home, 'v2');
+  mkdirSync(fresh);
+  chmodSync(fresh, 0o755);
+  const args = [...repo, '--state-dir', fresh];
+  assert.equal(run(...args, '--login').status, 0);
+  assert.equal(run(...args, '--check').status, 0);
+  assert.equal(statSync(fresh).mode & 0o777, 0o700);
+  assert.equal(readFileSync(oldLogin, 'utf8'), 'old fixture login');
 });
 
 function expectFailure(result, message) {
