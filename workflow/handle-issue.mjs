@@ -165,10 +165,12 @@ const ghJson = (...args) => JSON.parse(gh(...args));
 // no network, no writes, a throwaway HOME and no inherited environment.
 function testRun(cwd, codexHome) {
   const env = { PATH: process.env.PATH, HOME: mkdtempSync(join(tmpdir(), 'tests-')), CODEX_HOME: codexHome, LANG: 'en_US.UTF-8' };
-  const args = ['sandbox', '-P', ':read-only', '-C', cwd, '--', 'node', '--test', 'test/'];
+  // Match `npm test`: discover tests recursively from test/, not from workflow/.
+  const testDir = join(cwd, 'test');
+  const args = ['sandbox', '-P', ':read-only', '-C', testDir, '--', 'node', '--test'];
   let output;
   try {
-    output = sh('codex', args, { cwd, env });
+    output = sh('codex', args, { cwd: testDir, env });
   } catch (error) {
     const output = `${error.stdout ?? ''}${error.stderr ?? ''}`;
     // A sandbox or command failure is not a reproduced bug. Require a test-runner failure count.

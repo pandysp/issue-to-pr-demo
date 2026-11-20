@@ -1,91 +1,93 @@
-# issue-to-pr-demo
+# From a GitHub issue to a pull request
 
-A tiny CSV order exporter and a [Flue](https://flueframework.com) workflow that reacts to new GitHub issues.
+Two tickets come in about the same CSV export. One reports a missing order. The other asks to include internal notes. The first ticket has a result you can test. The second needs someone to decide who may see the data.
 
-When an issue is opened, the workflow sorts it by risk:
+This demo uses [Flue](https://flueframework.com/) and the Codex CLI to take a different next step for each ticket:
 
-- **Low risk** (a clear bug in the exporter): an agent writes a test that shows the bug, fixes the code, and the workflow opens a pull request that is ready for review. Nothing is merged automatically.
-- **High risk** (anything ambiguous, or a change to which data is exported): the workflow asks concrete questions on the issue and stops. No branch, no code, no pull request.
+| Real issue | What happened |
+| --- | --- |
+| [**#3 · CSV export is missing the last order**](https://github.com/pandysp/issue-to-pr-demo/issues/3) | `risk:low` · The agent wrote a regression test and fixed the exporter. Two tests failed on the old code; all four passed with the fix. [Review the patch in PR #5 →](https://github.com/pandysp/issue-to-pr-demo/pull/5/files) |
+| [**#4 · Include hidden fields in the CSV export**](https://github.com/pandysp/issue-to-pr-demo/issues/4) | `risk:high` · The agent asked, *“Who may generate and receive a CSV containing those fields?”* It stopped without changing code. [Read the questions →](https://github.com/pandysp/issue-to-pr-demo/issues/4#issuecomment-7040556532) |
 
-See both outcomes on the [original demo's Issues page](https://github.com/pandysp/issue-to-pr-demo/issues), or [try it on your own fork](#try-it-on-your-own-fork).
-
-## The exporter
-
-`src/export.mjs` turns selected orders into CSV. Only the public columns (`id`, `customer`, `total`, `status`) are exported. Internal notes stay out.
-
-```sh
-npm test                               # run the tests
-node src/cli.mjs data/orders.json      # export the three sample orders
-```
-
-## How the workflow works
-
-```
-new issue
-  → admission: only the repository owner and collaborators reach a model
-  → Triage agent (read-only) records a risk decision
-  → label risk:low or risk:high
-  → low:  Implement agent works in a throwaway checkout
-          → the workflow checks the change and runs the tests before and after
-          → pull request, ready for review
-  → high: questions on the issue, then stop
-```
-
-**Follow one ticket through the code:**
-
-1. [`listen.mjs`](workflow/listen.mjs) watches GitHub. When a new issue appears, it calls `handleIssue` with the issue number.
-2. [`handle-issue.mjs`](workflow/handle-issue.mjs) is the main story. Read `handleIssue` top to bottom: check the author, request a decision, apply the label, then either post questions and stop or request a fix, check it and open a PR. A person decides whether to merge.
-3. [`agents.mjs`](workflow/agents.mjs) shows what the model is asked to do at those two calls. `Triage` returns a structured decision; `Implement` edits a disposable checkout. Neither posts to GitHub.
-4. [`codex-provider.mjs`](workflow/codex-provider.mjs) is the adapter, not another workflow step. Read it if you want to see how a Flue model call becomes a sandboxed Codex CLI run using the attendee’s ChatGPT login.
-
-### What the agents can and cannot do
-
-- Neither agent has a Flue sandbox, so Flue gives them no file or shell tools.
-- Each model call is one `codex exec` run in Codex's own sandbox:
-  - Triage runs `read-only`.
-  - Implement runs `workspace-write` in one throwaway checkout. Network access is off.
-- The listener reads GitHub issues. The handler writes labels, comments and pull requests. Neither passes its GitHub token to Codex in the worker environment.
-- Codex signs in locally in a dedicated Codex home outside the checkout. You don't need to copy a token, export an API key, or put a secret in GitHub. Keep the state directory private: it contains the local sign-in and run records.
-- The workflow accepts a change only if it touches nothing outside `src/` and `test/`. The new tests must fail on the old code and pass on the new code. Otherwise no pull request is opened.
-- The workflow runs those tests itself, in Codex's read-only sandbox (`codex sandbox -P :read-only`): no network, no writes, a throwaway home directory. Only the counts go into the pull request.
-- Known limit: Codex's sandboxes block network and writes, but not reads. That is why only the owner and collaborators can start a run, and why the model's free-form implementation summary stays out of the PR. The issue questions, goal, acceptance check, filenames and test counts are visible on GitHub, as is the patch itself **before** a person reviews it.
-- Only issues GitHub marks `OWNER` or `COLLABORATOR` can start a model run. Organization membership (`MEMBER`) alone does not qualify. Use a personal fork for the walkthrough.
-- A re-delivered issue does not start a second run: each issue gets one Flue agent instance, created only once.
+You can inspect both runs without installing anything. To run it yourself, [start the listener on your fork](#try-it-on-your-own-fork). To see how the decision is made, [follow one ticket through the code](#how-the-workflow-works).
 
 ## Try it on your own fork
 
-<!-- pi 018634af · 2026-11-20T15:31+01:00 -->
-**You supply two logins.** GitHub gives the listener permission to write to *your fork*. Choosing **Sign in with ChatGPT** in the Codex CLI uses the Codex allowance of *your ChatGPT account*. It doesn't use the original author's subscription. This workflow doesn't use API-key billing or GitHub Actions.
+You'll need Git, Node.js 24 or newer (checked on 24.0.0 and 26.13.0), the [GitHub CLI](https://cli.github.com/) and the [Codex CLI](https://developers.openai.com/codex/cli/) (tested with 0.171.0) on macOS or Linux. GitHub gives the workflow permission to write to **your fork**. Your ChatGPT account supplies **your Codex allowance**. No API key or GitHub Actions secret is needed. Use a trusted machine: the agents' sandbox does not hide every file your user can read.
 
-Use a local macOS or Linux shell with Git, [GitHub CLI](https://cli.github.com/), [OpenAI Codex CLI](https://developers.openai.com/codex/cli/) and Node.js (tested with 26.13.0). Your ChatGPT account must include Codex and support the selected model at high reasoning effort. Use a trusted machine and trusted collaborators: the sandbox limits writes and networking, but does not isolate all reads.
+### 1. Fork and install
 
-1. Fork this repository on GitHub and enable **Settings → General → Features → Issues** on the fork. Run `gh auth login` if not already signed in. Clone **your fork**, not the original:
+[Fork this repository](https://github.com/pandysp/issue-to-pr-demo/fork) to your **personal account**. In your fork, enable **Settings → General → Features → Issues**. Sign in with `gh auth login` if needed, then run:
 
-   ```sh
-   REPO="$(gh api user --jq .login)/issue-to-pr-demo"  # edit if you renamed your fork
-   gh repo clone "$REPO" issue-to-pr-local
-   cd issue-to-pr-local/workflow
-   npm ci
-   ```
+```sh
+REPO="$(gh api user --jq .login)/issue-to-pr-demo"  # Change the name if you renamed your fork.
+gh repo clone "$REPO" issue-to-pr-local
+cd issue-to-pr-local/workflow
+npm ci
+```
 
-2. Sign in once for this demo. The command opens the official Codex login flow. Choose **Sign in with ChatGPT** and finish in your browser. It checks the login method and exits; it does not start a listener. Use the same terminal for the remaining commands.
+### 2. Sign in and listen
 
-   ```sh
-   node listen.mjs --repo "$REPO" --login
-   ```
+Use the same terminal. The talk used `gpt-6.2-sol` at high reasoning effort. If your plan doesn't offer it, run `export DEMO_CODEX_MODEL='your-model-id'` first. Use an ID from `/model` in your Codex CLI that supports high effort.
 
-   The login is stored under `~/.local/state/issue-to-pr-demo/<owner>/<repo>/codex-home` (lowercase owner/repo), separate from your everyday Codex setup. Never upload this directory, paste its contents, or put it in a fork or CI secret.
+The first command opens Codex sign-in for this demo. Choose **Sign in with ChatGPT**. The second watches your fork for 20 minutes.
 
-3. Check the target, then start listening. The talk used `gpt-6.2-sol`. If your account doesn't offer it, set `DEMO_CODEX_MODEL` to a model shown by `/model` in your Codex CLI that supports high reasoning effort.
+```sh
+node listen.mjs --repo "$REPO" --login
+node listen.mjs --repo "$REPO" --minutes 20
+```
 
-   ```sh
-   # export DEMO_CODEX_MODEL='your-model-id'
-   node listen.mjs --repo "$REPO" --check
-   node listen.mjs --repo "$REPO" --minutes 20
-   ```
+### 3. Open a new issue
 
-   `--check` reports the GitHub account, fork, default branch, ChatGPT login method and requested model. It doesn't call a model or verify model availability. The first issue makes the first model call; the workflow checks which model and effort actually ran. There is no fallback.
+Wait for **`listening on OWNER/REPO`**, then open an issue **on that fork** in your browser. Try one ticket at a time. The listener finishes the first before starting the next:
 
-4. Wait for **`listening on OWNER/REPO`**, then open a new issue on that fork as its owner or a collaborator. Try **“Include internal notes in the CSV export.”** Expect a risk label and questions about who may see those notes. For the low-risk path, try **“CSV export is missing the last selected order.”** A successful fix opens a PR; nothing is merged automatically.
+| Title | Body to paste |
+| --- | --- |
+| **Exporting a single order produces an empty CSV** | I selected order #103. The CSV had a header but no order row. I expect #103 exactly once with the existing columns. |
+| **Include internal notes in partner exports** | Support wants to share order context with partners. Could we include the internal notes in the CSV? |
 
-Keep the terminal running. The listener polls every 15 seconds; it ignores older tickets. Ctrl-C stops it, or it stops polling after the time window. Its private state directory holds checkouts, the Flue database, the listener log and `codex-receipts.jsonl` (thread ID, model, effort, sandbox). To use a different private directory outside the checkout, pass the same `--state-dir /path/to/state` to every command.
+Refresh the issue to see the label, then the questions or the link to a pull request. **A person decides whether to merge.**
+
+> **No label yet?** This is a local listener, not a hosted service. Leave the terminal open. It polls every 15 seconds and only picks up issues opened **after** it starts. Only GitHub users marked `OWNER` or `COLLABORATOR` can trigger a run. If a run fails, the terminal prints the issue number and error. Fix the cause, restart the listener, then open a fresh issue. Stop with `Ctrl-C`.
+
+## How the workflow works
+
+If you only open one file, read [`handleIssue()`](workflow/handle-issue.mjs). The high-risk branch posts questions and returns *before the code that creates a branch*. The low-risk branch must pass a separate check before it can open a PR.
+
+| Follow a ticket | Where to look |
+| --- | --- |
+| **Notice it.** Watch for new GitHub issues and handle them one at a time. | [`listen.mjs`](workflow/listen.mjs) |
+| **Decide.** Check the author, ask the read-only triage agent for a decision, enforce the allowed scope and apply the label. | [`handle-issue.mjs`](workflow/handle-issue.mjs) for the rules · [`agents.mjs`](workflow/agents.mjs) for the prompts |
+| **Act.** For high risk, post questions. For low risk, give the coding agent a disposable checkout. Test the patch, copy the changed tests onto the old exporter, and run them again. If they pass there too, they haven't shown the bug. | `postQuestions`, `verifyFix` and `openReviewPR` in [`handle-issue.mjs`](workflow/handle-issue.mjs) |
+| **Underneath both agents.** Connect each Flue model call to a sandboxed `codex exec` and record which model and reasoning effort actually ran. | [`codex-provider.mjs`](workflow/codex-provider.mjs) |
+
+The [workflow package](workflow/package.json) pins the runtime and exposes `npm test` (run from `workflow/`). Its [CLI setup test](workflow/setup.test.mjs) walks through sign-in and account checks; its [adapter test](workflow/codex-provider.test.mjs) exercises both agent roles without spending model usage. `npm ci` installs the versions in the [generated lockfile](workflow/package-lock.json).
+
+<details>
+<summary><strong>Run the exporter without an agent</strong></summary>
+
+From the repository root, no sign-in or package install is needed for the exporter:
+
+```sh
+npm test
+node src/cli.mjs data/orders.json
+```
+
+The [sample data](data/orders.json) contains three orders. On the demo baseline the CSV ends at #102, even though the original tests pass. [PR #5](https://github.com/pandysp/issue-to-pr-demo/pull/5) adds the missing check and fixes the export loop.
+
+</details>
+
+<details>
+<summary><strong>Permissions, test evidence and private state</strong></summary>
+
+- **Access.** GitHub organization membership alone (`MEMBER`) does not start a run. Use a trusted machine and trusted collaborators: sandboxing limits writes and network access but does **not** hide every file your user can read. The listener does not pass its GitHub token to Codex in the worker environment.
+- **Changes.** The workflow labels a run low risk only if all proposed files are under `src/` or `test/`. It checks the actual diff again before opening a PR. The patch is visible on GitHub before human review; the agent's free-form implementation summary stays out of the PR.
+- **Evidence.** The workflow runs tests itself in a read-only sandbox with networking disabled. The PR includes test counts rather than raw output. Flue creates each triage instance only once so the same issue doesn't start a second run.
+- **Private state.** The dedicated Codex login, database, checkouts, log and model receipts live under `~/.local/state/issue-to-pr-demo/<owner>/<repo>/` (lowercase). Keep this directory private and outside the checkout. To move it, pass the same `--state-dir /path/to/state` to every invocation.
+- **Setup check.** `node listen.mjs --repo "$REPO" --check` confirms the login method and repository access without starting a listener or consuming model usage. It reports the requested model; the first issue tests whether your account can use it.
+
+</details>
+
+[MIT license](LICENSE)
+
+<!-- pi 018634af · 2026-11-20T15:37+01:00 -->

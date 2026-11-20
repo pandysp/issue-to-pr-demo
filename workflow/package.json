@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Flue workflow that triages new issues and fixes low-risk ones.",
   "scripts": {
-    "listen": "node listen.mjs"
+    "listen": "node listen.mjs",
+    "test": "node --test *.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.2",
@@ -13,5 +14,8 @@
   },
   "overrides": {
     "@earendil-works/pi-ai": "1.5.2"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

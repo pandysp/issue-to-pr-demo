@@ -5,7 +5,7 @@
   "description": "A tiny CSV order exporter used to demo an issue-to-PR workflow.",
   "type": "module",
   "scripts": {
-    "test": "node --test test/",
+    "test": "cd test && node --test",
     "export": "node src/cli.mjs data/orders.json"
   },
   "engines": { "node": ">=20" },
