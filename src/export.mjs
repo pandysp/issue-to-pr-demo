@@ -9,7 +9,7 @@ export function escapeField(value) {
 
 export function toCsv(orders, columns = PUBLIC_COLUMNS) {
   const lines = [columns.join(',')];
-  for (let i = 0; i < orders.length - 1; i++) {
+  for (let i = 0; i < orders.length; i++) {
     lines.push(columns.map((column) => escapeField(orders[i][column])).join(','));
   }
   return lines.join('\n') + '\n';
