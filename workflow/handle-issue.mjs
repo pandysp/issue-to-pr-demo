@@ -2,7 +2,8 @@
 // Trusted code here talks to GitHub (gh CLI), checks the diff and runs the tests. The model never
 // gets a GitHub token: it only decides (Triage) and edits one throwaway checkout (Implement).
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentInstanceExistsError, init } from '@flue/runtime';
 import { Implement, Triage } from './agents.mjs';
@@ -16,12 +17,19 @@ const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8',
 const gh = (...args) => sh('gh', args);
 const ghJson = (...args) => JSON.parse(gh(...args));
 
-function testRun(cwd) {
-  try { return { passed: true, output: sh('node', ['--test', 'test/'], { cwd }) }; }
+// The tests contain model-written code, so they run inside Codex's read-only sandbox:
+// no network, no writes, a throwaway HOME and no inherited environment.
+function testRun(cwd, codexHome) {
+  const env = { PATH: process.env.PATH, HOME: mkdtempSync(join(tmpdir(), 'tests-')), CODEX_HOME: codexHome, LANG: 'en_US.UTF-8' };
+  try { return { passed: true, output: sh('codex', ['sandbox', '-P', ':read-only', '-C', cwd, '--', 'node', '--test', 'test/'], { cwd, env }) }; }
   catch (e) { return { passed: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}` }; }
 }
-const testSummary = (output) => output.split('\n').map((l) => l.trim())
-  .filter((l) => /^(not ok \d|ok \d|ℹ (tests|pass|fail) )/.test(l)).join('\n');
+// Only counts leave the machine; test output itself is model-influenced and is not posted.
+function testCounts(output) {
+  const n = (k) => Number(output.match(new RegExp(`^ℹ ${k} (\\d+)`, 'm'))?.[1] ?? NaN);
+  return { tests: n('tests'), pass: n('pass'), fail: n('fail') };
+}
+const countLine = (c) => `${c.tests} tests: ${c.pass} pass, ${c.fail} fail`;
 
 function receiptsSince(path, offset) {
   if (!existsSync(path)) return [];
@@ -45,7 +53,7 @@ async function ask(agent, id, message) {
  * @param {object} o
  * @param {string} o.repo        owner/name
  * @param {number} o.number      issue number
- * @param {object} o.dirs        { main, work, base, receipts }
+ * @param {object} o.dirs        { main, work, base, receipts, codexHome }
  * @param {(s: string) => void} o.log
  */
 export async function handleIssue({ repo, number, dirs, log }) {
@@ -115,10 +123,10 @@ export async function handleIssue({ repo, number, dirs, log }) {
   if (!changed.length) throw new Error(`#${number}: the coding step changed nothing`);
   const outside = changed.filter((f) => !ALLOWED_PATHS.test(f));
   if (outside.length) throw new Error(`#${number}: changes outside src/ and test/: ${outside.join(', ')}`);
-  const after = testRun(dirs.work);
-  if (!after.passed) throw new Error(`#${number}: tests fail after the change\n${testSummary(after.output)}`);
+  const after = testRun(dirs.work, dirs.codexHome);
+  if (!after.passed) throw new Error(`#${number}: tests fail after the change (${countLine(testCounts(after.output))})`);
   for (const f of changed.filter((f) => f.startsWith('test/'))) cpSync(join(dirs.work, f), join(dirs.base, f));
-  const before = testRun(dirs.base);
+  const before = testRun(dirs.base, dirs.codexHome);
   if (before.passed) throw new Error(`#${number}: the new tests also pass on the old code, so they do not show the bug`);
   writeFileSync(join(dirs.work, '..', `issue-${number}-tests.txt`), `BEFORE\n${before.output}\nAFTER\n${after.output}`);
 
@@ -132,8 +140,9 @@ export async function handleIssue({ repo, number, dirs, log }) {
     `Fixes #${number}.`, '', `**Goal:** ${t.goal}`, `**Done when:** ${t.acceptance}`, '',
     `**Changed:** ${changed.map((f) => `\`${f}\``).join(', ')}`, '',
     `**What the coding step reported:** ${impl.text.trim()}`, '',
-    '**Tests before the fix** (the new tests on the old code):', '```', testSummary(before.output), '```',
-    '**Tests after the fix:**', '```', testSummary(after.output), '```',
+    `**Tests before the fix** (the new tests on the old code): ${countLine(testCounts(before.output))}`,
+    `**Tests after the fix:** ${countLine(testCounts(after.output))}`,
+    '(Run by the workflow itself in a sandbox without network, not reported by the agent.)',
     'Ready for review. Nothing is merged automatically.', footer,
   ].join('\n');
   const pr = gh('pr', 'create', '--repo', repo, '--base', 'main', '--head', branch,

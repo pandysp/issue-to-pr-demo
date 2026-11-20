@@ -49,6 +49,8 @@ Code in `workflow/`:
 - The agents never see a GitHub token. Only `handle-issue.mjs` talks to GitHub.
 - Codex runs with its own home directory inside the state directory. It contains a link to the existing ChatGPT login and nothing else, so no personal Codex instructions, settings or MCP servers reach the agents. No credential is copied.
 - The workflow accepts a change only if it touches nothing outside `src/` and `test/`. The new tests must fail on the old code and pass on the new code. Otherwise no pull request is opened.
+- The workflow runs those tests itself, in Codex's read-only sandbox (`codex sandbox -P :read-only`): no network, no writes, a throwaway home directory. Only the counts go into the pull request.
+- Known limit: Codex's sandboxes block network and writes, but not reads. That is why only the owner and collaborators can start a run, and why the workflow posts nothing to GitHub except the triage text, the counts and the reviewed diff.
 - Issues from people who are not the owner or a collaborator are ignored, so strangers cannot start model runs.
 - A re-delivered issue does not start a second run: each issue gets one Flue agent instance, created only once.
 
